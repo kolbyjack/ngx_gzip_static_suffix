@@ -133,6 +133,10 @@ ngx_http_gzip_static_suffix_handler(ngx_http_request_t *r)
         of.errors = clcf->open_file_cache_errors;
         of.events = clcf->open_file_cache_events;
 
+        if (ngx_http_set_disable_symlinks(r, clcf, &path, &of) != NGX_OK) {
+            return NGX_HTTP_INTERNAL_SERVER_ERROR;
+        }
+
         if (ngx_open_cached_file(clcf->open_file_cache, &path, &of, r->pool)
             == NGX_OK)
         {
@@ -154,6 +158,10 @@ ngx_http_gzip_static_suffix_handler(ngx_http_request_t *r)
             return NGX_DECLINED;
 
         case NGX_EACCES:
+#if (NGX_HAVE_OPENAT)
+        case NGX_EMLINK:
+        case NGX_ELOOP:
+#endif
 
             level = NGX_LOG_ERR;
             break;
@@ -212,6 +220,10 @@ ngx_http_gzip_static_suffix_handler(ngx_http_request_t *r)
     r->headers_out.content_length_n = of.size;
     r->headers_out.last_modified_time = of.mtime;
 
+    if (ngx_http_set_etag(r) != NGX_OK) {
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+
     if (ngx_http_set_content_type(r) != NGX_OK) {
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
@@ -225,8 +237,6 @@ ngx_http_gzip_static_suffix_handler(ngx_http_request_t *r)
     ngx_str_set(&h->key, "Content-Encoding");
     ngx_str_set(&h->value, "gzip");
     r->headers_out.content_encoding = h;
-
-    r->ignore_content_encoding = 1;
 
     /* we need to allocate all before the header would be sent */
 
@@ -250,7 +260,7 @@ ngx_http_gzip_static_suffix_handler(ngx_http_request_t *r)
     b->file_last = of.size;
 
     b->in_file = b->file_last ? 1 : 0;
-    b->last_buf = 1;
+    b->last_buf = (r == r->main) ? 1 : 0;
     b->last_in_chain = 1;
 
     b->file->fd = of.fd;
